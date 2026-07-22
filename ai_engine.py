@@ -3,7 +3,7 @@ from openai import OpenAI
 
 class SchoolOpsAIEngine:
     def __init__(self):
-        # Reads the key directly from open ai key.txt
+        # Reads key directly from open ai key.txt if present, or environment variable
         try:
             with open("open ai key.txt", "r") as f:
                 api_key = f.read().strip()
@@ -15,7 +15,7 @@ class SchoolOpsAIEngine:
     def generate_evaluation_report(self, employee_data: dict) -> dict:
         """Generates performance evaluations based on school operations log data."""
         try:
-            if "dummy_key" in self.client.api_key or not os.environ.get("OPENAI_API_KEY"):
+            if "dummy_key" in self.client.api_key and not os.environ.get("OPENAI_API_KEY"):
                 raise ValueError("No valid OpenAI API key detected.")
 
             prompt = f"""
@@ -25,17 +25,17 @@ class SchoolOpsAIEngine:
             Key Operational Data:
             - Total Tasks Processed: {employee_data['Total Tasks']}
             - Completion Rate: {employee_data['Completion Rate (%)']:.1f}%
-            - High-Complexity Tasks Handled (e.g., Configurations/Report Cards): {employee_data['Complex Tasks']}
+            - High-Complexity Tasks Handled: {employee_data['Complex Tasks']}
             - Schools Serviced: {employee_data['Schools Serviced']}
             - Pending/Incomplete Tasks: {employee_data['Pending Tasks']}
             - Overall Weighted Performance Score: {employee_data['Overall Score']:.2f}/100
             
             Generate a 5-section evaluation report with these EXACT headings:
-            1. STRENGTHS: Highlights on task volume, speed, completion rate, or technical scope.
-            2. AREAS FOR IMPROVEMENT: Focus on pending task resolution, accuracy, or task balancing.
-            3. SCHOOL & OPERATIONAL IMPACT: How their work impacts school client satisfaction and smooth operations.
-            4. PROMOTION & SPECIALIZATION READINESS: Readiness for Senior Operations Lead, Onboarding Specialist, or QA.
-            5. TARGETED TRAINING RECOMMENDATIONS: Suggested modules (e.g., Batch Configurations, Advanced Data Auditing).
+            1. STRENGTHS
+            2. AREAS FOR IMPROVEMENT
+            3. SCHOOL & OPERATIONAL IMPACT
+            4. PROMOTION & SPECIALIZATION READINESS
+            5. TARGETED TRAINING RECOMMENDATIONS
             """
 
             response = self.client.chat.completions.create(
@@ -53,7 +53,7 @@ class SchoolOpsAIEngine:
             return self._generate_local_fallback(employee_data)
 
     def _generate_local_fallback(self, data: dict) -> dict:
-        """Offline fallback generator if the API is unavailable."""
+        """Offline fallback generator if the API key is not supplied or fails."""
         score = data['Overall Score']
         
         if score >= 85:
