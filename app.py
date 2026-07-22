@@ -9,12 +9,14 @@ st.set_page_config(page_title="School Operations Evaluation System", layout="wid
 st.title("🏫 School Operations & Data Team Evaluation System")
 st.markdown("Track data entry tasks, work types, completion statuses, and school coverage for operational staff.")
 
+# Initialize AI Engine
 ai_engine = SchoolOpsAIEngine()
 
+# Sidebar Setup
 st.sidebar.header("📥 Log Upload")
 uploaded_file = st.sidebar.file_uploader("Upload Work Log Excel (.xlsx)", type=["xlsx"])
 
-# Mock Generator reflecting your exact image fields
+# Mock Generator reflecting exact log fields
 if not uploaded_file:
     st.info("💡 Upload your work log file, or click below to simulate with sample data.")
     mock_logs = pd.DataFrame([
@@ -27,14 +29,16 @@ if not uploaded_file:
         {"DATE": "2026-07-20", "NAME": "Sita Verma", "SCHOOL NAME": "DPS Public School", "WORK TYPE": "HW Message sent", "STATUS": "Completed", "REMARKS": "Daily HW posted"},
         {"DATE": "2026-07-21", "NAME": "Sita Verma", "SCHOOL NAME": "DPS Public School", "WORK TYPE": "Data Checking", "STATUS": "Pending", "REMARKS": "Discrepancy found"}
     ])
-    st.dataframe(mock_logs, use_container_width=True)
+    st.dataframe(mock_logs, width="stretch")
     if st.button("Use Simulated Operations Sample Logs"):
         uploaded_file = "MOCK_ACTIVE"
 
+# Main Data Processing & Tabs
 if uploaded_file:
-    df_raw = mock_logs if uploaded_file == "MOCK_ACTIVE" else pd.read_excel(uploaded_file)
+    # Reads the first raw sheet explicitly
+    df_raw = mock_logs if uploaded_file == "MOCK_ACTIVE" else pd.read_excel(uploaded_file, sheet_name=0)
     
-    # Process Logs
+    # Process Logs safely
     try:
         summary_df = process_operations_logs(df_raw)
     except Exception as e:
@@ -47,27 +51,44 @@ if uploaded_file:
         st.subheader("Team Task Performance Analytics")
         col1, col2, col3 = st.columns(3)
         col1.metric("Total System Tasks", len(df_raw))
-        col2.metric("Schools Serviced", df_raw['SCHOOL NAME'].nunique())
+        col2.metric("Schools Serviced", df_raw['SCHOOL NAME'].nunique() if 'SCHOOL NAME' in df_raw.columns else 0)
         col3.metric("Avg Team Score", f"{summary_df['Overall Score'].mean():.1f}/100")
 
         c1, c2 = st.columns(2)
         
         # Most Common Work Types
-        work_counts = df_raw['WORK TYPE'].value_counts().reset_index()
-        work_counts.columns = ['WORK TYPE', 'Count']
-        fig_work = px.bar(work_counts.head(10), x='Count', y='WORK TYPE', orientation='h', title="Top 10 Work Types Executed")
-        c1.plotly_chart(fig_work, use_container_width=True)
+        if 'WORK TYPE' in df_raw.columns:
+            work_counts = df_raw['WORK TYPE'].value_counts().reset_index()
+            work_counts.columns = ['WORK TYPE', 'Count']
+            fig_work = px.bar(work_counts.head(10), x='Count', y='WORK TYPE', orientation='h', title="Top 10 Work Types Executed")
+            c1.plotly_chart(fig_work, width="stretch")
 
         # Work Status Breakdown
-        fig_status = px.pie(df_raw, names='STATUS', title="Overall Task Status Distribution", hole=0.4)
-        c2.plotly_chart(fig_status, use_container_width=True)
+        if 'STATUS' in df_raw.columns:
+            fig_status = px.pie(df_raw, names='STATUS', title="Overall Task Status Distribution", hole=0.4)
+            c2.plotly_chart(fig_status, width="stretch")
 
     with tab2:
         st.subheader("Employee Merit Standings")
-        st.dataframe(summary_df.style.background_gradient(subset=['Overall Score'], cmap='Blues'), use_container_width=True)
+        
+        # Safe table rendering without external CSS/pandas styler dependencies
+        st.dataframe(
+            summary_df,
+            column_config={
+                "Overall Score": st.column_config.ProgressColumn(
+                    "Overall Score",
+                    help="Weighted performance score out of 100",
+                    format="%.1f",
+                    min_value=0,
+                    max_value=100,
+                ),
+            },
+            width="stretch",
+            hide_index=True
+        )
 
         fig_rank = px.bar(summary_df, x='NAME', y='Overall Score', color='Performance Tier', title="Overall Performance Score Comparison")
-        st.plotly_chart(fig_rank, use_container_width=True)
+        st.plotly_chart(fig_rank, width="stretch")
 
     with tab3:
         st.subheader("Individual Performance Diagnostic")
