@@ -7,80 +7,127 @@ from reportlab.lib import colors
 import io
 
 HIGH_COMPLEXITY_WORK = [
-    "Batch configuration", "Fee configuration", "Syllabus", "Time Table",
-    "Report card publish", "Report card checking", "Data Upload",
-    "Sender ID Registration", "DLT Registration", "Class Teacher assigned"
+    "BATCH CONFIGURATION", "FEE CONFIGURATION", "SYLLABUS", "TIME TABLE",
+    "REPORT CARD PUBLISH", "REPORT CARD CHECKING", "DATA UPLOAD",
+    "SENDER ID REGISTRATION", "DLT REGISTRATION", "CLASS TEACHER ASSIGNED"
 ]
 
 def process_operations_logs(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregates raw task entries into accurate employee performance metrics."""
+    """Cleans raw logs or pre-aggregated summary sheets and guarantees non-negative pending values."""
     df = df.copy()
     
-    # Clean up column names (strip whitespace and uppercase)
+    # 1. Standardize column headers
     df.columns = [str(c).strip().upper() for c in df.columns]
 
-    # Clean Status column
-    df['IS_COMPLETED'] = df['STATUS'].astype(str).str.upper().str.contains('COMPLETE|DONE|PUBLISH|SENT|SUCCESS|TRUE|1')
-    
-    # Classify complexity
-    df['WORK_TYPE_STR'] = df['WORK TYPE'].astype(str) if 'WORK TYPE' in df.columns else ""
-    df['IS_HIGH_COMPLEX'] = df['WORK_TYPE_STR'].isin(HIGH_COMPLEXITY_WORK)
-    
-    school_col = [c for c in df.columns if 'SCHOOL' in c]
-    school_field = school_col[0] if school_col else 'SCHOOL NAME'
+    # Clean string values in all text columns
+    for col in df.select_dtypes(include=['object']).columns:
+        df[col] = df[col].fillna("").astype(str).str.strip()
 
-    # Group & calculate base metrics
-    summary = df.groupby('NAME').agg(
-        Total_Tasks=('STATUS', 'count'),
-        Completed_Tasks=('IS_COMPLETED', 'sum'),
-        Complex_Tasks=('IS_HIGH_COMPLEX', 'sum'),
-        Schools_Serviced=(school_field, 'nunique') if school_field in df.columns else ('STATUS', lambda x: 1)
-    ).reset_index()
+    # Detect if the uploaded sheet is already a summary format
+    cols_upper = list(df.columns)
+    is_summary = any(k in cols_upper for k in ['TOTAL TASKS', 'COMPLETED TASKS', 'PENDING TASKS', 'OVERALL SCORE'])
 
-    # DATA ACCURACY FIXES:
-    # 1. Completed tasks can never exceed Total Tasks
-    summary['Completed Tasks'] = np.minimum(summary['Completed_Tasks'], summary['Total_Tasks'])
-    summary['Total Tasks'] = summary['Total_Tasks']
-    
-    # 2. Pending Tasks can never be negative
-    summary['Pending Tasks'] = np.maximum(0, summary['Total Tasks'] - summary['Completed Tasks'])
-    
-    # 3. Completion Rate capped at 100.0% max
-    summary['Completion Rate (%)'] = (summary['Completed Tasks'] / np.maximum(1, summary['Total Tasks'])) * 100.0
-    summary['Completion Rate (%)'] = summary['Completion Rate (%)'].clip(upper=100.0)
+    if is_summary:
+        total_col = [c for c in df.columns if 'TOTAL' in c][0]
+        comp_col = [c for c in df.columns if 'COMPLETED' in c][0]
+        complex_cols = [c for c in df.columns if 'COMPLEX' in c]
+        school_cols = [c for c in df.columns if 'SCHOOL' in c]
 
-    summary['Complex Tasks'] = summary['Complex_Tasks']
-    summary['Schools Serviced'] = summary['Schools_Serviced']
+        complex_col = complex_cols[0] if complex_cols else None
+        school_col = school_cols[0] if school_cols else None
 
-    # Weighted Component Scores (0-100)
-    summary['Volume Score'] = (summary['Total Tasks'] / 50.0).clip(upper=1.0) * 100.0
-    summary['Complexity Score'] = (summary['Complex Tasks'] / 10.0).clip(upper=1.0) * 100.0
-    summary['Reach Score'] = (summary['Schools Serviced'] / 5.0).clip(upper=1.0) * 100.0
+        name_col = 'NAME' if 'NAME' in df.columns else df.columns[0]
+
+        summary = pd.DataFrame({
+            'NAME': df[name_col],
+            'Total_Tasks': pd.to_numeric(df[total_col], errors='coerce').fillna(0).astype(int),
+            'Completed_Tasks': pd.to_numeric(df[comp_col], errors='coerce').fillna(0).astype(int),
+            'Complex_Tasks': pd.to_numeric(df[complex_col], errors='coerce').fillna(0).astype(int) if complex_col else 0,
+            'Schools_Serviced': pd.to_numeric(df[school_col], errors='coerce').fillna(0).astype(int) if school_col else 1
+        })
+    else:
+        # Process raw log sheets
+        status_str = df['STATUS'].astype(str).str.upper() if 'STATUS' in df.columns else pd.Series([""] * len(df))
+        df['IS_COMPLETED'] = status_str.str.contains('COMPLETE|DONE|PUBLISH|SENT|SUCCESS|TRUE|1', regex=True)
+        
+        work_type_str = df['WORK TYPE'].astype(str).str.upper() if 'WORK TYPE' in df.columns else pd.Series([""] * len(df))
+        df['IS_HIGH_COMPLEX'] = work_type_str.isin(HIGH_COMPLEXITY_WORK)
+        
+        school_col = [c for c in df.columns if 'SCHOOL' in c]
+        school_field = school_col[0] if school_col else ('SCHOOL NAME' if 'SCHOOL NAME' in df.columns else None)
+
+        if 'NAME' not in df.columns:
+            df['NAME'] = "Unknown Employee"
+
+        agg_dict = {
+            'IS_COMPLETED': ['count', 'sum'],
+            'IS_HIGH_COMPLEX': 'sum'
+        }
+        if school_field and school_field in df.columns:
+            agg_dict[school_field] = 'nunique'
+
+        summary = df.groupby('NAME').agg(agg_dict).reset_index()
+        
+        if school_field and school_field in df.columns:
+            summary.columns = ['NAME', 'Total_Tasks', 'Completed_Tasks', 'Complex_Tasks', 'Schools_Serviced']
+        else:
+            summary.columns = ['NAME', 'Total_Tasks', 'Completed_Tasks', 'Complex_Tasks']
+            summary['Schools_Serviced'] = 1
+
+    # 2. GUARANTEED NON-NEGATIVE MATH RE-CALCULATION
+    # Ensure Total Tasks is at least equal to Completed Tasks
+    summary['Total Tasks'] = np.maximum(summary['Total_Tasks'], summary['Completed_Tasks'])
+    summary['Completed Tasks'] = summary['Completed_Tasks']
+
+    # HARD OVERRIDE: Force Pending Tasks to be strictly >= 0
+    summary['Pending Tasks'] = np.maximum(0, summary['Total Tasks'] - summary['Completed Tasks']).astype(int)
     
-    # Overall Score
+    # Completion Rate %
+    summary['Completion Rate (%)'] = np.where(
+        summary['Total Tasks'] > 0,
+        (summary['Completed Tasks'] / summary['Total Tasks']) * 100.0,
+        0.0
+    ).clip(0, 100.0).round(2)
+
+    summary['Complex Tasks'] = summary['Complex_Tasks'].fillna(0).astype(int)
+    summary['Schools Serviced'] = summary['Schools_Serviced'].fillna(0).astype(int)
+
+    # 3. RELATIVE METRICS & PERFORMANCE TIERS
+    max_tasks = max(summary['Total Tasks'].max(), 1)
+    max_complex = max(summary['Complex Tasks'].max(), 1)
+    max_schools = max(summary['Schools Serviced'].max(), 1)
+
+    summary['Volume Score'] = (summary['Total Tasks'] / max_tasks) * 100.0
+    summary['Complexity Score'] = (summary['Complex Tasks'] / max_complex) * 100.0
+    summary['Reach Score'] = (summary['Schools Serviced'] / max_schools) * 100.0
+    
     summary['Overall Score'] = (
-        (summary['Completion Rate (%)'] * 0.40) +
-        (summary['Volume Score'] * 0.30) +
+        (summary['Completion Rate (%)'] * 0.35) +
+        (summary['Volume Score'] * 0.35) +
         (summary['Complexity Score'] * 0.20) +
         (summary['Reach Score'] * 0.10)
     ).round(2)
 
     def assign_tier(score):
-        if score >= 88: return 'High Achiever'
-        elif score >= 75: return 'Consistent Performer'
-        elif score >= 60: return 'Needs Improvement'
+        if score >= 85: return 'High Achiever'
+        elif score >= 65: return 'Consistent Performer'
+        elif score >= 45: return 'Needs Improvement'
         else: return 'Critical Attention Required'
 
     summary['Performance Tier'] = summary['Overall Score'].apply(assign_tier)
     
-    # Clean export columns
     display_cols = [
-        'NAME', 'Total Tasks', 'Completed Tasks', 'Pending Tasks', 
-        'Complex Tasks', 'Schools Serviced', 'Completion Rate (%)', 
+        'NAME', 'Total Tasks', 'Completed Tasks', 'Pending Tasks',
+        'Complex Tasks', 'Schools Serviced', 'Completion Rate (%)',
         'Overall Score', 'Performance Tier'
     ]
     
-    return summary[display_cols].sort_values(by='Overall Score', ascending=False).reset_index(drop=True)
+    sorted_summary = summary.sort_values(
+        by=['Overall Score', 'Total Tasks', 'Complex Tasks'],
+        ascending=[False, False, False]
+    ).reset_index(drop=True)
+
+    return sorted_summary[display_cols]
 
 
 def generate_employee_pdf(emp_data: dict, ai_report: dict) -> bytes:
@@ -93,10 +140,10 @@ def generate_employee_pdf(emp_data: dict, ai_report: dict) -> bytes:
     heading_style = ParagraphStyle('SectionHeading', parent=styles['Heading2'], fontSize=12, leading=16, textColor=colors.HexColor('#1F4E78'), spaceBefore=10)
     body_style = ParagraphStyle('BodyTextCustom', parent=styles['Normal'], fontSize=10, leading=14)
 
-    elements = []
-
-    elements.append(Paragraph(f"Operations Audit Report: {emp_data['NAME']}", title_style))
-    elements.append(Spacer(1, 10))
+    elements = [
+        Paragraph(f"Operations Audit Report: {emp_data['NAME']}", title_style),
+        Spacer(1, 10)
+    ]
 
     table_data = [
         ["Metric", "Value", "Metric", "Value"],
@@ -117,13 +164,14 @@ def generate_employee_pdf(emp_data: dict, ai_report: dict) -> bytes:
     elements.append(t)
     elements.append(Spacer(1, 15))
 
-    for title, section_content in ai_report.items():
-        elements.append(Paragraph(f"<b>{title.upper()}</b>", heading_style))
-        elements.append(Spacer(1, 4))
-        for line in section_content.split('\n'):
-            if line.strip():
-                elements.append(Paragraph(line.strip(), body_style))
-        elements.append(Spacer(1, 10))
+    if isinstance(ai_report, dict):
+        for title, section_content in ai_report.items():
+            elements.append(Paragraph(f"<b>{title.upper()}</b>", heading_style))
+            elements.append(Spacer(1, 4))
+            for line in str(section_content).split('\n'):
+                if line.strip():
+                    elements.append(Paragraph(line.strip(), body_style))
+            elements.append(Spacer(1, 10))
 
     doc.build(elements)
     buffer.seek(0)
