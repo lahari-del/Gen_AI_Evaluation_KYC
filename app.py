@@ -9,7 +9,7 @@ from ai_engine import SchoolOpsAIEngine
 st.set_page_config(page_title="School Operations Evaluation System", layout="wide")
 
 st.title("🏫 School Operations & Data Team Evaluation System")
-st.markdown("Track data entry tasks, work types, completion statuses, and school coverage for operational staff.")
+st.markdown("Track data entry tasks, speed targets, forms volume, work types, and school coverage for operational staff.")
 
 # Initialize AI Engine
 ai_engine = SchoolOpsAIEngine()
@@ -21,10 +21,10 @@ uploaded_file = st.sidebar.file_uploader("Upload Work Log Excel (.xlsx or .csv)"
 if not uploaded_file:
     st.info("💡 Upload your work log file, or click below to simulate with sample data.")
     mock_logs = pd.DataFrame([
-        {"DATE": "2026-07-20", "NAME": "Pranay", "SCHOOL NAME": "Greenwood High", "WORK TYPE": "New Admission", "STATUS": "Completed"},
-        {"DATE": "2026-07-20", "NAME": "Pranay", "SCHOOL NAME": "Oakridge", "WORK TYPE": "Fee configuration", "STATUS": "Completed"},
-        {"DATE": "2026-07-20", "NAME": "Sumanth", "SCHOOL NAME": "DPS Public", "WORK TYPE": "Absentees", "STATUS": "Completed"},
-        {"DATE": "2026-07-21", "NAME": "Sumanth", "SCHOOL NAME": "DPS Public", "WORK TYPE": "Data Checking", "STATUS": "Pending"}
+        {"DATE": "2026-07-20", "NAME": "Pranay", "SCHOOL NAME": "Greenwood High", "WORK TYPE": "New Admission", "STATUS": "Completed", "TARGET": 70},
+        {"DATE": "2026-07-20", "NAME": "Pranay", "SCHOOL NAME": "Oakridge", "WORK TYPE": "Fee configuration", "STATUS": "Completed", "TARGET": 70},
+        {"DATE": "2026-07-20", "NAME": "Sumanth", "SCHOOL NAME": "DPS Public", "WORK TYPE": "Absentees", "STATUS": "Completed", "TARGET": 50},
+        {"DATE": "2026-07-21", "NAME": "Sumanth", "SCHOOL NAME": "DPS Public", "WORK TYPE": "Data Checking", "STATUS": "Pending", "TARGET": 50}
     ])
     st.dataframe(mock_logs, width="stretch")
     if st.button("Use Simulated Operations Sample Logs"):
@@ -53,10 +53,15 @@ if uploaded_file:
     tab1, tab2, tab3 = st.tabs(["📊 Operations Overview", "🏆 Full Leaderboard & Metrics", "👤 Employee AI Diagnostics & PDFs"])
 
     with tab1:
-        st.subheader("Team Task Performance Analytics")
-        col1, col2, col3, col4 = st.columns(4)
+        st.subheader("Team Task & Target Speed Performance Analytics")
+        
+        # Macro KPIs (Includes Add-on Specs: Forms & Target Speed)
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Total System Tasks", int(summary_df['Total Tasks'].sum()))
-        col2.metric("Total Staff Evaluated", len(summary_df))
+        col2.metric("Total Forms Processed", int(summary_df['Total Forms'].sum()) if 'Total Forms' in summary_df.columns else int(summary_df['Total Tasks'].sum()))
+        
+        speed_val = f"{summary_df['Speed Rate (%)'].mean():.1f}%" if 'Speed Rate (%)' in summary_df.columns else "N/A"
+        col3.metric("Avg Speed vs Target", speed_val)
 
         # Accurate school count across dataset
         school_col = [c for c in df_raw.columns if 'SCHOOL' in str(c).upper()]
@@ -65,15 +70,17 @@ if uploaded_file:
         else:
             total_schools = int(summary_df['Schools Serviced'].sum())
 
-        col3.metric("Schools Serviced", total_schools)
-        col4.metric("Avg Team Score", f"{summary_df['Overall Score'].mean():.1f}/100")
+        col4.metric("Schools Serviced", total_schools)
+        col5.metric("Avg Team Score", f"{summary_df['Overall Score'].mean():.1f}/100")
+
+        st.divider()
 
         c1, c2 = st.columns(2)
         work_col = [c for c in df_raw.columns if 'WORK' in str(c).upper() or 'TYPE' in str(c).upper()]
         if work_col:
             work_counts = df_raw[work_col[0]].astype(str).str.strip().value_counts().reset_index()
             work_counts.columns = ['WORK TYPE', 'Count']
-            fig_work = px.bar(work_counts.head(10), x='Count', y='WORK TYPE', orientation='h', title="Top Work Types Executed")
+            fig_work = px.bar(work_counts.head(10), x='Count', y='WORK TYPE', orientation='h', title="Top Work Types Executed (Calls, Absentees, Configs)")
             c1.plotly_chart(fig_work, width="stretch")
 
         status_col = [c for c in df_raw.columns if 'STATUS' in str(c).upper()]
@@ -82,7 +89,7 @@ if uploaded_file:
             c2.plotly_chart(fig_status, width="stretch")
 
     with tab2:
-        st.subheader("Complete Employee Rankings")
+        st.subheader("Complete Employee Rankings & Speed Targets")
         
         sort_order = st.radio("Sort Employees By Score:", ["Highest to Lowest", "Lowest to Highest"], horizontal=True)
         
@@ -97,21 +104,31 @@ if uploaded_file:
                 ascending=[False, False, False]
             ).reset_index(drop=True)
 
+        # Configure Column Formats Including Add-on Specifications
+        column_configuration = {
+            "Overall Score": st.column_config.ProgressColumn(
+                "Overall Score",
+                help="Relative score based on completion, volume, complexity, and school reach",
+                format="%.1f",
+                min_value=0,
+                max_value=100,
+            ),
+            "Completion Rate (%)": st.column_config.NumberColumn(
+                "Completion Rate (%)",
+                format="%.1f%%"
+            )
+        }
+
+        if "Speed Rate (%)" in sorted_df.columns:
+            column_configuration["Speed Rate (%)"] = st.column_config.NumberColumn(
+                "Speed Rate (%)",
+                help="Forms completed vs management target (70, 50, 100)",
+                format="%.1f%%"
+            )
+
         st.dataframe(
             sorted_df,
-            column_config={
-                "Overall Score": st.column_config.ProgressColumn(
-                    "Overall Score",
-                    help="Relative score based on completion, volume, complexity, and school reach",
-                    format="%.1f",
-                    min_value=0,
-                    max_value=100,
-                ),
-                "Completion Rate (%)": st.column_config.NumberColumn(
-                    "Completion Rate (%)",
-                    format="%.1f%%"
-                )
-            },
+            column_config=column_configuration,
             width="stretch",
             hide_index=True
         )
@@ -137,7 +154,16 @@ if uploaded_file:
         with c1:
             st.metric(label="Overall Score", value=f"{emp_row['Overall Score']:.1f} / 100")
             st.caption(f"Tier: **{emp_row['Performance Tier']}**")
+            
+            # Displays existing metrics + new target speed add-ons
             st.write(f"- **Total Tasks Handled:** {emp_row['Total Tasks']}")
+            if 'Total Forms' in emp_row:
+                st.write(f"- **Total Forms Completed:** {emp_row['Total Forms']}")
+            if 'Target' in emp_row:
+                st.write(f"- **Daily Target Quota:** {emp_row['Target']}")
+            if 'Speed Rate (%)' in emp_row:
+                st.write(f"- **Speed vs Target:** {emp_row['Speed Rate (%)']:.1f}%")
+            
             st.write(f"- **Completed Tasks:** {emp_row['Completed Tasks']}")
             st.write(f"- **Pending Tasks:** {emp_row['Pending Tasks']}")
             st.write(f"- **Completion Rate:** {emp_row['Completion Rate (%)']:.1f}%")
